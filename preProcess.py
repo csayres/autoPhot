@@ -9,84 +9,85 @@ import numpy
 import datetime
 import time
 import glob
-import matplotlib.pyplot
+import matplotlib.pyplot as plt
 import matplotlib.dates
 
 
-class ImageStackData(object):
-    """Interface for holding data corresponding to a group of stacked images.
-    """
-    def __init__(self, imgDataList):
-        """Inputs:
-        imgDataList: a list of ImageData objects to be treated as a single (stacked)
-        exposure.
-        
-        notes:
-        date of observation is adopted from the first image in list
-        filter is adopted from the first image in list
-        exposure time is added for all exposures
-        ccd data is simply stacked
-        """
-        exptime = 0
-        self.fileList = []
-        self.dateObs = imgDataList[0].dateObs
-        self.filter =  imgDataList[0].filter
-        for img in imgDataList:
-            exptime += img.exptime
-            self.fileList.append(img.filename)
-        self.exptime = exptime
-        self.targCentroid = None # to be entered upon photometry. PyGuide Centroid Object
-        self.targShape = None # to be entered upon photometry. PyGuide StarShape Object
-        self.compCentroid = [] # to be entered upon photometry. List of PyGuide Centroid Objects
-        self.compShape = [] # to be entered upon photometry. List of PyGuide StarShape Objects
-        
-        
-    @property
-    def data(self):
-        stackedData = None
-        for file in self.fileList:
-            img = pyfits.open(file)
-            data = img[0].data
-            img.close()
-            if stackedData==None:
-                stackedData = data
-                continue
-            stackedData += data
-        return data
-
-    @property        
-    def compPhot(self):
-        """Return background subtracted photometry for each comparison star
-        output: list length(self.compCentorid), of ADU/second
-        """ 
-        photOut = []
-        for cent, shape in itertools.izip(self.compCentroid, self.compShape):
-            try:
-                print 'ref pix: ', cent.pix
-                photOut.append((cent.counts - (cent.imStats.med)*cent.pix)/self.exptime)
-            except TypeError:
-                photOut.append(numpy.nan)
-        return numpy.asarray(photOut)
-    
-    @property        
-    def targPhot(self):
-        """Return background subtracted photometry for each comparison star
-        output: a background subtracted ADU/second
-        """ 
-        cent = self.targCentroid
-        print 'targ pix: ', cent.pix
-        shape = self.targShape 
-        return numpy.asarray((cent.counts - (cent.imStats.med)*cent.pix)/self.exptime)
-        
-    @property
-    def diffPhot(self):
-        """Return a differential flux/sec by dividing target flux by
-        the sum of all reference star flux
-        """
-        refFluxAll = numpy.sum(self.compPhot)
-        return self.targPhot / refFluxAll
+# class ImageStackData(object):
+#     """Interface for holding data corresponding to a group of stacked images.
+#     """
+#     def __init__(self, imgDataList):
+#         """Inputs:
+#         imgDataList: a list of ImageData objects to be treated as a single (stacked)
+#         exposure.
+#         
+#         notes:
+#         date of observation is adopted from the first image in list
+#         filter is adopted from the first image in list
+#         exposure time is added for all exposures
+#         ccd data is simply stacked
+#         """
+#         exptime = 0
+#         self.fileList = []
+#         self.dateObs = imgDataList[0].dateObs
+#         self.filter =  imgDataList[0].filter
+#         for img in imgDataList:
+#             exptime += img.exptime
+#             self.fileList.append(img.filename)
+#         self.exptime = exptime
+#         self.targCentroid = None # to be entered upon photometry. PyGuide Centroid Object
+#         self.targShape = None # to be entered upon photometry. PyGuide StarShape Object
+#         self.compCentroid = [] # to be entered upon photometry. List of PyGuide Centroid Objects
+#         self.compShape = [] # to be entered upon photometry. List of PyGuide StarShape Objects
+#         
+#         
+#     @property
+#     def data(self):
+#         stackedData = None
+#         for file in self.fileList:
+#             img = pyfits.open(file)
+#             data = img[0].data
+#             img.close()
+#             if stackedData==None:
+#                 stackedData = data
+#                 continue
+#             stackedData += data
+#         return data
+# 
+#     @property        
+#     def compPhot(self):
+#         """Return background subtracted photometry for each comparison star
+#         output: list length(self.compCentorid), of ADU/second
+#         """ 
+#         photOut = []
+#         for cent, shape in itertools.izip(self.compCentroid, self.compShape):
+#             try:
+#                 print 'ref pix: ', cent.pix
+#                 photOut.append((cent.counts - (cent.imStats.med)*cent.pix)/self.exptime)
+#             except TypeError:
+#                 photOut.append(numpy.nan)
+#         return numpy.asarray(photOut)
+#     
+#     @property        
+#     def targPhot(self):
+#         """Return background subtracted photometry for each comparison star
+#         output: a background subtracted ADU/second
+#         """ 
+#         cent = self.targCentroid
+#         print 'targ pix: ', cent.pix
+#         shape = self.targShape 
+#         return numpy.asarray((cent.counts - (cent.imStats.med)*cent.pix)/self.exptime)
+#         
+#     @property
+#     def diffPhot(self):
+#         """Return a differential flux/sec by dividing target flux by
+#         the sum of all reference star flux
+#         """
+#         refFluxAll = numpy.sum(self.compPhot)
+#         return self.targPhot / refFluxAll
                     
-    
+
+# note add magnitudes?
     
 class ImageData(object):
     """an object for storing image attributes for easy lookup
@@ -104,8 +105,10 @@ class ImageData(object):
         self.filter = filter
         self.targCentroid = None # to be entered upon photometry. PyGuide Centroid Object
         self.targShape = None # to be entered upon photometry. PyGuide StarShape Object
+        self.targPhotObj = None # to be entered upon photometry. phot.ApPhot Object
         self.compCentroid = [] # to be entered upon photometry. List of PyGuide Centroid Objects
         self.compShape = [] # to be entered upon photometry. List of PyGuide StarShape Objects
+        self.compPhotObj = [] # to be entered upon photometry. List of phot.ApPhot Objects
 
     @property        
     def data(self):
@@ -115,9 +118,11 @@ class ImageData(object):
         return data
 
     @property        
-    def compPhot(self):
+    def compPhotPG(self):
         """Return background subtracted photometry for each comparison star
         output: list length(self.compCentorid), of ADU/second
+        
+        PyGuide photometry
         """ 
         photOut = []
         for cent, shape in itertools.izip(self.compCentroid, self.compShape):
@@ -128,22 +133,61 @@ class ImageData(object):
         return numpy.asarray(photOut)
     
     @property        
-    def targPhot(self):
+    def targPhotPG(self):
         """Return background subtracted photometry for each comparison star
         output: a background subtracted ADU/second
+        
+        PyGuide photometry
         """ 
         cent = self.targCentroid
         shape = self.targShape
         return numpy.asarray((cent.counts - (cent.imStats.med)*cent.pix)/self.exptime)
         
     @property
+    def diffPhotPG(self):
+        """Return a differential flux/sec by dividing target flux by
+        the sum of all reference star flux
+        
+        PyGuide photometry
+        """
+        refFluxAll = numpy.sum(self.compPhotPG)
+        return self.targPhotPG / refFluxAll
+
+    @property
+    def compPhot(self):
+        """Return background subtracted photometry for each comparison star
+        output: list length(self.compCentorid), of ADU/second
+        
+        phot.ApPhot photometry
+        """ 
+        photOut = []
+        for comp in self.compPhotObj:
+            if not comp:
+                # comp == None
+                photOut.append(numpy.nan)
+            else:
+                photOut.append(comp.counts/self.exptime)
+        return numpy.asarray(photOut)
+    
+    @property
+    def targPhot(self):
+        """Return background subtracted photometry for each comparison star
+        output: a background subtracted ADU/second
+        
+        phot.ApPhot photometry
+        """ 
+        return self.targPhotObj.counts/self.exptime
+    
+    @property
     def diffPhot(self):
         """Return a differential flux/sec by dividing target flux by
         the sum of all reference star flux
-        """
+        
+        phot.ApPhot photometry
+        """      
         refFluxAll = numpy.sum(self.compPhot)
         return self.targPhot / refFluxAll
-
+        
 class PreProcess(object):
     """Go through all files and organize.
     """

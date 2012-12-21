@@ -1,319 +1,238 @@
-"""Do photometry
+"""Tools for doing aperture photometry
+
+note: what do do if center is not inside image?
 """
 
-import time
 import numpy
+import scipy.ndimage as nd
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
+import itertools
 
-import PyGuide
-
-from triangleHash import *
-from preProcess import *
-
-# flare cam header solutions, used in preprocessing
-flareCam = {
-'dateObs': 'DATE-OBS', # of form: 2012-05-20T11:29:23.338
-'exptime': 'EXPTIME',
-'filter': 'FILTER',
-'imgExt': 'FIT', # image file extention
-'readNoise': 11,
-'ccdGain': 1.5 
-}
-
-
-class FieldPhot(object):
-    """Photometry object for doing photometry on a field
+class PhotObj(object):
+    """A class for holding the photometry information
     """
-    def __init__(self, objName, dir = '../../data/', instDict = flareCam):
+    def __init__(self, countsInfo, skyInfo, img, center, radii, gridDense):
         """Inputs:
-        dir - directory with data files to reduce.
+        countsInfo: [counts, inds] vector containing all counts for partial pixels, inds 2d array with xy indices, shold be background subtracted
+        skyInfo: [counts, inds] vector containing all sky values for partial pixels, inds 2d array with xy indices
+        img: the interpolated image region used for this specific psf
+        center: the determined center of the psf, scaled to match img
+        radii: [aperture, innerSky, outerSky], in original pixel scaling
+        gridDense: the gridDense factor used to create partial pixels
         """
-        self.objName = objName
-        self.preProcess = PreProcess(objName, dir, instDict)
-        self.targetCoords = None
-        self.comparisonCoords = []
-        self.ccd = PyGuide.CCDInfo(0, instDict['readNoise'], instDict['ccdGain']) # from flarecam manual
-        self.refHash = None
-        self.refData = None
-        self.nBrightStars = 10 # only use this many stars for image alignments
-        self.searchRad = None # pixels
+        self._counts = countsInfo[0]
+        self._countsInds = countsInfo[1]
+        self._sky = skyInfo[0]
+        self._skyInds = skyInfo[1]
+        self._center = center
+        self._img = img
+        self._radii = radii
+        self._gridDense = gridDense
 
-    def circle(self, xyCtr, rad):
-        """Takes a center and a radius, returns x and y for plotting
-        """
-        theta = numpy.linspace(0, 2*numpy.pi, 100)
-        x = rad * numpy.cos(theta) + xyCtr[0]
-        y = rad * numpy.sin(theta) + xyCtr[1]
-        return x, y
-        
-    def showField(self, imgData, targ, comp, title = None, block = False, fig = None):
-        """Show the ccd image
-        
-        imgData = 2D image array
-        targ = None, or x,y position of a target to highlight
-        ref = None, or list of x,y positions for all reference objects
-        block = Plot blocks code
-        """
-        if fig !=None:
-            plt.close(fig)
-        fig = plt.figure()    
-        axNew = fig.add_subplot(111)
-        #norm = colors.Normalize()
-        #axNew.imshow(imgData, vmin = 0, vmax = 1000, cmap=cm.Greys_r)
-        axNew.imshow(numpy.log(imgData**6), cmap=cm.Greys_r)        
-        # do circles
-        targX, targY = self.circle(targ, self.searchRad)
-        axNew.plot(targX, targY, 'r')
-        for coords in comp:
-            try:
-                compX, compY = self.circle(coords, self.searchRad)
-                axNew.plot(compX, compY, 'g')
-            except:
-                pass
-            #axNew.plot((coords)[0], (coords)[1], 'og', ms = 20, alpha = 0.5)
-        if title:
-            plt.title(title)
-        plt.show(block=block)
-        time.sleep(0.5)
-        return fig
-        #plt.close(fig)
-
-    def doPhot(self, stack = None, showEvery = None):
-        """Begin doing automatic photometry
-        """
-        if self.refHash == None:
-            print 'No reference frame found. Must run setupField() to select stars first.'
-            return
-        if stack == True:
-            self.preProcess.filterDict = self.preProcess.newDictStacked(self.preProcess.filterDict)    
-        self.refHash = self.doHash(self.refdata)
-        tstart = time.time()
-        fig = plt.figure()
-        for filter, objList in self.preProcess.filterDict.items():
-            for num, obj in enumerate(objList[:200]):
-                data = obj.data                
-                exptime = obj.exptime
-                dateObs = obj.dateObs
-                newHash = self.doHash(data)
-                targCent = self.centroid(self.targetCoords, data)
-                try: 
-                    if not targCent.isOK:
-                        print 'target wasnt found'
-                        raise RuntimeError('target not found')
-                    offset = numpy.subtract(self.targetCoords, targCent.xyCtr) # if a small offset was present
-                    for val in self.comparisonCoords:
-                        cent = self.centroid(numpy.subtract(val, offset), data)
-                        if not cent.isOK:
-                            print 'comparison not found'
-                            raise RuntimeError('comparison not found')# one of the comparison stars wasn't found, try solving for big offset
-                except RuntimeError:                     
-                    offset = self.refHash.hashItOut(newHash) # offset is computed every time
-                    targCent = self.centroid(self.targetCoords - offset, data)
-                    if not targCent.isOK:
-                        print 'well Fuck, couldnt find target after offset'
-                        fig = self.showField(data, self.targetCoords, self.comparisonCoords, block=True, fig = fig)
-                        fig = self.showField(data, self.targetCoords-offset, self.comparisonCoords-offset, block=True, fig=fig)    
-                        continue                    
-                    # offset worked, update shit
-                self.refHash = newHash
-                self.targetCoords = targCent.xyCtr
-                for ind, val in enumerate(self.comparisonCoords):
-                    self.comparisonCoords[ind] = numpy.subtract(val, offset)
-                compCent = []
-                compShape = []                
-                for compCoord in self.comparisonCoords:
-                    # do one reference star at a time
-                    coord = self.centroid(compCoord, data)
-                    if not coord.isOK:
-                        print 'Comparison Warning: %s' % coord.msgStr
-                    compCent.append(coord)
-                    compShape.append(self.starShape(compCoord, data))
-                if showEvery != None and num % showEvery == 0:      
-                    fig = self.showField(data, self.targetCoords, self.comparisonCoords, title = 'Image Num %s' % num, fig = fig)
-                # enter into dicionary
-                self.preProcess.filterDict[filter][num].targCentroid = targCent
-                self.preProcess.filterDict[filter][num].targShape = self.starShape(targCent.xyCtr, data)
-                self.preProcess.filterDict[filter][num].compCentroid = compCent
-                self.preProcess.filterDict[filter][num].compShape = compShape
-                #self.showField(data, self.targetCoords, self.comparisonCoords)
-        plt.close(fig)
-        print 'took %s seconds' % (time.time() - tstart)
-        
-    def doHash(self, data):
-        """Setup the triangle hash table for correcting image offsets
-        Inputs:
-        data: x,y image array
-        """
-        # Set up Hash Table for the 1st image (which all others will be compared to)
-        refCoords, stats = PyGuide.findStars(data, None, None, self.ccd)
-        # extract xy centers and just keep the nBrightStars
-        num = min(len(refCoords), self.nBrightStars)
-        refCoords = numpy.asarray([refCoords[j].xyCtr for j in range(num)])
-        return TriangleHash(refCoords)
-        
-    def setupField(self, n=0, rad=None):
-        """Select target and comparison stars
-        Inputs:
-        n = image number, defaults to zero
-        """
-        if rad != None:
-            self.searchRad = rad
-        # grab the first image from preprocessing
-        # don't care about filter
-        items = self.preProcess.filterDict.iteritems()
-        filt, img = items.next()
-        self.refdata = img[n].data
-        self.refHash = self.doHash(self.refdata)
-        # first select target star and comparisons
-        fig = plt.figure()
-        ax = fig.add_subplot(111)
-        #norm = colors.Normalize()
-        ax.imshow(numpy.log(self.refdata**6), cmap=cm.Greys_r)
-        #ax.imshow(self.refdata, vmin = 0, vmax = 1000, cmap=cm.Greys_r)
-        ax.set_clim=(0.0,0.7)
-        cid = fig.canvas.mpl_connect('button_press_event', self.onclick)
-        print 'Click on target star'
-        plt.show()
-        if self.targetCoords == None:
-            raise RuntimeError('No Target was selected!')
-        if not self.comparisonCoords:
-            print 'Warning: no comparision stars were selected'       
-
-    def centroid(self, xyPos, data):
-        """check to see if there is valid signal at xpos, ypos, on image data
-        if so return the centroid.
-        """
-        return PyGuide.centroid(data, None, None, xyPos, rad = self.searchRad, #pixels
-            ccdInfo = self.ccd)
-
-    def starShape(self, xyPos, data):
-        """fit a star shape at an xy position
-        """
-        return PyGuide.starShape(data, None, xyPos, self.searchRad)
-        
-    def onclick(self, event):
-        """Click on plot callback function. Set the target star and comparision stars
-        """
-        cent = self.centroid([event.xdata, event.ydata], self.refdata)
-        if cent.isOK:
-            if self.targetCoords == None:
-                # first click, it's the target
-                self.targetCoords = numpy.asarray(cent.xyCtr)
-                if self.searchRad == None: # set it automatically
-                    self.searchRad = self.starShape(cent.xyCtr, self.refdata).fwhm * 3.
-                #self.ax.plot(self.targCoords[0], self.targCoords[1], 'or', ms = 20, alpha = 0.5)
-                print 'Got Target, now click on desired comarison stars.'
-            else:
-                # must be a comparison star click
-                # check if we already got that target
-                dist = numpy.linalg.norm(numpy.asarray(cent.xyCtr) - numpy.asarray(self.targetCoords))
-                if dist < 4:
-                    print 'Already got that star!'
-                    return
-                for comp in self.comparisonCoords:
-                    dist = numpy.linalg.norm(numpy.asarray(cent.xyCtr) - numpy.asarray(comp))
-                    if dist < 4:
-                        print 'Already got that star!'
-                        return
-                self.comparisonCoords.append(numpy.asarray(cent.xyCtr))
-                print 'Got comparison star'
-        else:
-            # centroid didn't work, try again?
-            print 'Star not found...try another click?'
-            
-    def plotLightCurve(self, time, timeseries, title=None, xlabel=None, ylabel=None):
-        """plot a light curve
-        """
-        plt.figure()
-        timeseries = numpy.asarray(timeseries)
-        plt.plot(time, timeseries, '.k')
-        if xlabel:
-            plt.xlabel(xlabel)
-        if ylabel:
-            plt.ylabel(ylabel)  
-        if title:      
-            plt.title(title)
-        plt.show()
-        
-    def plotTarg(self, filter = None):
-        """Plot lightcurve for target
-        """        
-        if filter == None:
-            # just use the first one...
-            keys = self.preProcess.filterDict.keys()
-            filter = keys[0]
-        objs = self.preProcess.filterDict[filter]
-        time = []
-        timeseries = []
-        for obj in objs[:200]:
-            time.append(obj.dateObs)
-            timeseries.append(obj.targPhot)
-        time = numpy.asarray(time)
-        timeseries = numpy.asarray(timeseries)
-        self.plotLightCurve(
-            time, timeseries, 
-            title = 'Target Light Curve',
-            xlabel = 'Date of Observation',
-            ylabel = 'ADUs per second'
-            )
     
-    def plotRef(self, filter=None):
-        """Plot a panel of all reference stars' lightcurves
+    @property
+    def counts(self):
+        """Return the number of counts for the psf, summing partial pixel values
         """
-        if filter == None:
-            # just use the first one...
-            keys = self.preProcess.filterDict.keys()
-            filter = keys[0]
-        objs = self.preProcess.filterDict[filter]
-        time = []
-        timeseries = []
-        for obj in objs[:200]:
-            time.append(obj.dateObs)
-            timeseries.append(obj.compPhot)
-        time = numpy.asarray(time)
-        timeseries = numpy.asarray(timeseries).T # n stars 0 dim, time 1 dim
-        for num, ts in enumerate(timeseries):
-            self.plotLightCurve(
-                time, ts, 
-                title = 'Target Light Curve %s' % str(num),
-                xlabel = 'Date of Observation',
-                ylabel = 'ADUs per second'
-                )
-                
-    def plotDiff(self, filter=None):
-        """Plot differential photometry for target
+        return numpy.sum(self._counts)
+
+    @property
+    def sky(self):
+        """Return the sky value, this is rescaled (backwards) to match level corresponding
+        to an original pixel (not a partial pixel).
         """
-        if filter == None:
-            # just use the first one...
-            keys = self.preProcess.filterDict.keys()
-            filter = keys[0]
-        objs = self.preProcess.filterDict[filter]
-        time = []
-        timeseries = []
-        for obj in objs[:200]:
-            time.append(obj.dateObs)
-            timeseries.append(obj.diffPhot)
-        time = numpy.asarray(time)
-        timeseries = numpy.asarray(timeseries)
-        m = numpy.median(timeseries)
-        timeseries = timeseries / m # normalize so lightcurve sits at 1
-        self.plotLightCurve(
-            time, timeseries, 
-            title = 'Target Light Curve',
-            xlabel = 'Date of Observation',
-            ylabel = '% Variation Flux'
-            )            
+        return self.skyPartial * (self._gridDense**2)
+    
+    @property
+    def skyPartial(self):
+        """median sky value of a partial pixel
+        """         
+        return numpy.median(self._sky)
+    
+    def showExtraction(self):
+        """Make a plot of the interpolated psf with overlays showing the radii of interest
+        """
+        #img = plt.imshow(self._img, interpolation='none', origin='upper')
+        
+        psfMask = numpy.zeros(self._img.shape)
+        #imgOut = self._img[:]
+        maskVal = numpy.median(self._counts) # so it scales to a nice color
+        imgOut = numpy.zeros(self._img.shape) - maskVal
+        skyMask = numpy.zeros(self._img.shape)
+        
+        for x,y in itertools.izip(self._countsInds[0], self._countsInds[1]):
+            imgOut[x,y] = self._img[x,y]
+        for x,y in itertools.izip(self._skyInds[0], self._skyInds[1]):
+            imgOut[x,y] = self._img[x,y]
+        img = plt.imshow(imgOut, interpolation='none', origin='upper')    
+        #im2 = plt.imshow(psfMask, interpolation='none', origin='upper', alpha=.6)
+        #im2 = plt.imshow(skyMask, interpolation='none', origin='upper', alpha=.6)   
+        plt.plot(self._center[0], self._center[1], 'r.')
+        plt.xlim(0, imgOut.shape[0]-1)
+        plt.ylim(0, imgOut.shape[0]-1)     
+        plt.colorbar()
+        plt.show()
+    
+    def skyHist(self):
+        """Generate a histogram of the sky values
+        """
+        plt.hist(self._sky)
+        plt.show()
+    
+    def countsHist(self):
+        """Generate a histogram of the counts
+        """
+        plt.hist(self._counts)
+        plt.show()
+    
+
+class ApPhot(object):
+    """Object for doing aperture photometry
+    """
+    def __init__(self, data, inrad, skyAnnulus, 
+                gridDense=11, splineOrder=0):
+        """
+        data: 2d image array
+        center: xy center of object (psf)
+        inrad: inner radius aperture
+        skyAnnulus: (inner radius, outer radius)
+        gridDense: increase grid density by this factor, determines number of partial
+            pixels to be made
+        splineOrder: order of the spline to fit to the upsampled image section.
+                    0 = none.    
+        """
+        self.data = data
+        if gridDense % 2 == 0:
+            gridDense += 1 # I told you it must be odd.
+        self.inrad = inrad 
+        self.skyAnnulus = skyAnnulus 
+        self.gridDense = gridDense
+        self.splineOrder = splineOrder
+    
+    def fuckinDoIt(self, center):
+        """Do aperture photmetry around a center point, return a photObj
+        """
+        center = numpy.asarray(center)
+        # keep only region of image centered around object of square length about
+        # the outer annulus
+        region = self._regionExtract(center)
+        # create a denser version for partial pixel emulation
+        denseData = self._denseify(region)
+        # center in new coordinates
+        denseCenter = self._getNewCent(center, denseData)
+        # get sky photometry
+        # Annulus was given in pixels corresponding to the original image data
+        # since then we have extracted a region and densified it, so the Annulus
+        # values must be scaled accordingly
+        skyInfo = self.radialExtract(denseData, denseCenter, 
+                                            self.skyAnnulus[1] * self.gridDense,
+                                            self.skyAnnulus[0] * self.gridDense)
+        # determine median sky value and subtract
+        skyLevel = numpy.median(skyInfo[0])
+        denseNoSky = denseData - skyLevel
+        countsInfo = self.radialExtract(denseNoSky, denseCenter, 
+                                        self.inrad * self.gridDense)
+        return PhotObj(countsInfo = countsInfo, 
+                        skyInfo = skyInfo, 
+                        img = denseNoSky, 
+                        center = denseCenter, 
+                        radii = [self.inrad, self.skyAnnulus[0], self.skyAnnulus[1]], 
+                        gridDense = self.gridDense)
+        
         
 
-# for testing
-# g = FieldPhot('test')
-# g.setupField()
-# g.doPhot(stack=True)
-            
-if __name__ == '__main__':
-    g = FieldPhot('test')
-    g.setupField()
-    g.doPhot()
-    #g.timeseries.plotGreen()
-    #g.timeseries.plotDiff()
+    def _getNewCent(self, oldCenter, interpData):
+        """Determine the new center position of the psf after regionExtract/densify
+        Inputs:
+        center: the originial xyPos of the psf corresponding to self.data
+        interpData: the new region-extracted and densified data
+        
+        Returns:
+        A new center point corresponding to interpData
+        """
+        # offset of center from it's nearest pixel (which was used as the center
+        # pixel for _regionExtract, which then must be scaled by the new grid density
+        scaledOffset = (numpy.round(oldCenter) - oldCenter)*self.gridDense
+        # new centerpoint is the coords of this offset from the center of interpData
+        return numpy.floor(interpData.shape[0]/2.) - scaledOffset       
+        
+        
+    def _regionExtract(self, center):
+        """Extract square region around star of interest. Box-size 
+        based on skyAnnulus.
+        
+        returns
+        region: the extracted square region, centered on the nearest pixel
+            to center. Sidelength is odd and equal to self.skyAnnulus[1] or
+            self.skyAnnulus[1]+1 (whichever is odd)
+        """
+        boxSize = self.skyAnnulus[1]
+        # box must have odd size length, so there is always 1 center pixel
+        if self.skyAnnulus[1] % 2 == 0:
+            boxSize = boxSize + 1
+        centerPix = numpy.round(center) # pixel closest to psf center
+        # get region of image centered on centerPix, of size (boxSize, boxSize)
+        # note x,y reversal, it works.
+        region = self.data[centerPix[1]-boxSize:centerPix[1]+boxSize+1, centerPix[0]-boxSize:centerPix[0]+boxSize+1]
+        return region
+        
+    def _denseify(self, region):
+        """slice the image into a denser grid. Should be done after _regionExtract,
+        so you're working with less pixels, and only the region of interest.
+        
+        if self.spline order > 0, smoothing will occur during this process
+        
+        inputs:
+        region: the image data, should be a region rather than a whole image
+        
+        returns: 
+        denseData: the upsampled (and possibly interpolated) data 
+        """ 
+        denseData = nd.zoom(region, self.gridDense, order=self.splineOrder, prefilter=False)
+        # grid is higher density so must renormalize so each pixel counts for less
+        denseData = denseData/(self.gridDense**2) 
+        return denseData
+                    
+    def radialExtract(self, data, center, outer, inner=0):
+        """Return values from data between inner and outer radius centered at center
+        must be odd elements and square
+        if inner = 0 then no inner bound
+    
+        return values, (xinds, yinds) from original input array
+        """    
+        daRng = numpy.arange(0,data.shape[0],1)
+        xGrid, yGrid = numpy.meshgrid(daRng, daRng)
+        xOff = xGrid - center[0]
+        yOff = yGrid - center[1]
+        dist = numpy.sqrt(xOff**2+yOff**2)
+        inds = numpy.nonzero((dist <= outer) & (dist >=inner))
+        values = data[inds]
+        return values, inds
+        
+    def getSkyCounts(self, denseData, denseCenter):
+        """Determine the sky value using the median value determined in the outer annulus
+        
+        Returns:
+        the median value within the outer annulus
+        """
+
+        values, inds = radialExtract(denseData, denseCenter, 
+                                     self.skyAnnulus[1] * self.gridDense,
+                                     self.skyAnulus[0] * self.gridDense)
+        values
+        
+    def getPSFCounts(self, denseData, denseCenter):
+        """Determine the sky value using the median value determined in the outer annulus
+        
+        Returns:
+        the median value within the outer annulus
+        """
+        # Annulus was given in pixels corresponding to the original image data
+        # since then we have extracted a region and densified it, so the Annulus
+        # values must be scaled accordingly
+        values, inds = radialExtract(denseData, denseCenter, 
+                                     self.inrad * self.gridDense)
+        values
+                                     
+                
+        
