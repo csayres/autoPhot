@@ -29,10 +29,9 @@ class PhotObj(object):
         self._radii = radii
         self._gridDense = gridDense
 
-    
     @property
     def counts(self):
-        """Return the number of counts for the psf, summing partial pixel values
+        """Return the number of counts for the psf, summing partial pixel values.
         """
         return numpy.sum(self._counts)
 
@@ -48,42 +47,6 @@ class PhotObj(object):
         """median sky value of a partial pixel
         """         
         return numpy.median(self._sky)
-    
-    def showExtraction(self):
-        """Make a plot of the interpolated psf with overlays showing the radii of interest
-        """
-        #img = plt.imshow(self._img, interpolation='none', origin='upper')
-        
-        psfMask = numpy.zeros(self._img.shape)
-        #imgOut = self._img[:]
-        maskVal = numpy.median(self._counts) # so it scales to a nice color
-        imgOut = numpy.zeros(self._img.shape) - maskVal
-        skyMask = numpy.zeros(self._img.shape)
-        
-        for x,y in itertools.izip(self._countsInds[0], self._countsInds[1]):
-            imgOut[x,y] = self._img[x,y]
-        for x,y in itertools.izip(self._skyInds[0], self._skyInds[1]):
-            imgOut[x,y] = self._img[x,y]
-        img = plt.imshow(imgOut, interpolation='none', origin='upper')    
-        #im2 = plt.imshow(psfMask, interpolation='none', origin='upper', alpha=.6)
-        #im2 = plt.imshow(skyMask, interpolation='none', origin='upper', alpha=.6)   
-        plt.plot(self._center[0], self._center[1], 'r.')
-        plt.xlim(0, imgOut.shape[0]-1)
-        plt.ylim(0, imgOut.shape[0]-1)     
-        plt.colorbar()
-        plt.show()
-    
-    def skyHist(self):
-        """Generate a histogram of the sky values
-        """
-        plt.hist(self._sky)
-        plt.show()
-    
-    def countsHist(self):
-        """Generate a histogram of the counts
-        """
-        plt.hist(self._counts)
-        plt.show()
     
 
 class ApPhot(object):

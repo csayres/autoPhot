@@ -1,5 +1,8 @@
 """Look at files in the directory of interest.  Directory should contain
 just one object.  Multiple filters are found and seperated.
+
+note: pyguide set to 5 px search radius
+note: add way to check if reference is outside image to avoid unnecessary hashing.
 """
 
 import pyfits
@@ -11,183 +14,190 @@ import time
 import glob
 import matplotlib.pyplot as plt
 import matplotlib.dates
+import PyGuide
+import copy
+import img
+from camera import flareCam
+import viz
 
+from triangleHash import *
 
-# class ImageStackData(object):
-#     """Interface for holding data corresponding to a group of stacked images.
-#     """
-#     def __init__(self, imgDataList):
-#         """Inputs:
-#         imgDataList: a list of ImageData objects to be treated as a single (stacked)
-#         exposure.
-#         
-#         notes:
-#         date of observation is adopted from the first image in list
-#         filter is adopted from the first image in list
-#         exposure time is added for all exposures
-#         ccd data is simply stacked
-#         """
-#         exptime = 0
-#         self.fileList = []
-#         self.dateObs = imgDataList[0].dateObs
-#         self.filter =  imgDataList[0].filter
-#         for img in imgDataList:
-#             exptime += img.exptime
-#             self.fileList.append(img.filename)
-#         self.exptime = exptime
-#         self.targCentroid = None # to be entered upon photometry. PyGuide Centroid Object
-#         self.targShape = None # to be entered upon photometry. PyGuide StarShape Object
-#         self.compCentroid = [] # to be entered upon photometry. List of PyGuide Centroid Objects
-#         self.compShape = [] # to be entered upon photometry. List of PyGuide StarShape Objects
-#         
-#         
-#     @property
-#     def data(self):
-#         stackedData = None
-#         for file in self.fileList:
-#             img = pyfits.open(file)
-#             data = img[0].data
-#             img.close()
-#             if stackedData==None:
-#                 stackedData = data
-#                 continue
-#             stackedData += data
-#         return data
-# 
-#     @property        
-#     def compPhot(self):
-#         """Return background subtracted photometry for each comparison star
-#         output: list length(self.compCentorid), of ADU/second
-#         """ 
-#         photOut = []
-#         for cent, shape in itertools.izip(self.compCentroid, self.compShape):
-#             try:
-#                 print 'ref pix: ', cent.pix
-#                 photOut.append((cent.counts - (cent.imStats.med)*cent.pix)/self.exptime)
-#             except TypeError:
-#                 photOut.append(numpy.nan)
-#         return numpy.asarray(photOut)
-#     
-#     @property        
-#     def targPhot(self):
-#         """Return background subtracted photometry for each comparison star
-#         output: a background subtracted ADU/second
-#         """ 
-#         cent = self.targCentroid
-#         print 'targ pix: ', cent.pix
-#         shape = self.targShape 
-#         return numpy.asarray((cent.counts - (cent.imStats.med)*cent.pix)/self.exptime)
-#         
-#     @property
-#     def diffPhot(self):
-#         """Return a differential flux/sec by dividing target flux by
-#         the sum of all reference star flux
-#         """
-#         refFluxAll = numpy.sum(self.compPhot)
-#         return self.targPhot / refFluxAll
-                    
+INRAD = 3 # pixels
+SKYANN = [6,8] # pixels
+RES = 21 # must be odd
+SPLINE = 0 # should probably remain 0.  Higher orders seem to
+# introduce some structure (aliasing?) into the signal
+# more experimentation is probably merited.
+NBRIGHTSTARS = 10
 
-# note add magnitudes?
-    
-class ImageData(object):
-    """an object for storing image attributes for easy lookup
+class Driver(object):
+    """Drives the reduction process, keeps track of what's going on and what's next
     """
-    def __init__(self, filename, dateObs, exptime, filter):
-        """Inputs:
-        filename = the filename
-        dateObs = a python datetime object for the time of observation
-        exptime = exposure time
-        filter = filter
+    def __init__(self, objFileList, instDict, biasFileList = None, flatFileList = None):
+        """biasList: list of bias images to use, a path
+        flatList: list of flats to use, a path
+        objPathList: list of obj images to use, should all be of same field, path
         """
-        self.filename = filename
-        self.dateObs = dateObs
-        self.exptime = exptime
-        self.filter = filter
-        self.targCentroid = None # to be entered upon photometry. PyGuide Centroid Object
-        self.targShape = None # to be entered upon photometry. PyGuide StarShape Object
-        self.targPhotObj = None # to be entered upon photometry. phot.ApPhot Object
-        self.compCentroid = [] # to be entered upon photometry. List of PyGuide Centroid Objects
-        self.compShape = [] # to be entered upon photometry. List of PyGuide StarShape Objects
-        self.compPhotObj = [] # to be entered upon photometry. List of phot.ApPhot Objects
+        calibrator = None
+        if biasFileList and flatFileList:
+            biasList = img.imgLister(biasFileList, type = 'bias', 
+                                        instDict = flareCam, calibrator = None)
+            flatList = img.imgLister(flatFileList, type = 'flat', 
+                                instDict = flareCam, calibrator = None)
+            calibrator = img.Calibrator(biasList, flatList) # removes bias from flats
+        else:
+            print 'no calibration frames reveived!, proceeding'
+        self.calibrator = calibrator
+        self.objList = img.imgLister(objFileList, type = 'light', 
+                            instDict = flareCam, calibrator = calibrator)
+        self.ccdInfo = PyGuide.CCDInfo(0, instDict['readNoise'], instDict['ccdGain']) # from flarecam manual
+        self.fieldSolution = FieldSolution() # initialize empty
 
-    @property        
-    def data(self):
-        img = pyfits.open(self.filename)
-        data = img[0].data
-        img.close()
-        return data
-
-    @property        
-    def compPhotPG(self):
-        """Return background subtracted photometry for each comparison star
-        output: list length(self.compCentorid), of ADU/second
-        
-        PyGuide photometry
-        """ 
-        photOut = []
-        for cent, shape in itertools.izip(self.compCentroid, self.compShape):
-            try:
-                photOut.append((cent.counts - (cent.imStats.med)*cent.pix)/self.exptime)
-            except TypeError:
-                photOut.append(numpy.nan)
-        return numpy.asarray(photOut)
-    
-    @property        
-    def targPhotPG(self):
-        """Return background subtracted photometry for each comparison star
-        output: a background subtracted ADU/second
-        
-        PyGuide photometry
-        """ 
-        cent = self.targCentroid
-        shape = self.targShape
-        return numpy.asarray((cent.counts - (cent.imStats.med)*cent.pix)/self.exptime)
-        
-    @property
-    def diffPhotPG(self):
-        """Return a differential flux/sec by dividing target flux by
-        the sum of all reference star flux
-        
-        PyGuide photometry
+    def chooseTarget(self, imgNum = 0)  
+        """Select the target star
         """
-        refFluxAll = numpy.sum(self.compPhotPG)
-        return self.targPhotPG / refFluxAll
-
-    @property
-    def compPhot(self):
-        """Return background subtracted photometry for each comparison star
-        output: list length(self.compCentorid), of ADU/second
-        
-        phot.ApPhot photometry
-        """ 
-        photOut = []
-        for comp in self.compPhotObj:
-            if not comp:
-                # comp == None
-                photOut.append(numpy.nan)
+        def setTarget(event):
+            """matplotlib clicky callback
+            """
+            cent = self.centroid([event.xdata, event.ydata] + 0.5, self.fieldSolution.img.data)
+            if cent.isOK:
+                self.fieldSolution.targetCoords = cent.xyCtr
+                print 'got target'
+                viz.showField(event.inaxes, self.fieldSolution)
             else:
-                photOut.append(comp.counts/self.exptime)
-        return numpy.asarray(photOut)
-    
-    @property
-    def targPhot(self):
-        """Return background subtracted photometry for each comparison star
-        output: a background subtracted ADU/second
+                print 'target not found, try again?'
+            
+        self.fieldSolution.img = self.objList[imgNum]
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        viz.showField(ax, self.fieldSolution)
+        cid = fig.canvas.mpl_connect('button_press_event', setTarget)
+        print 'Click on target star'
+        plt.show()
+        if self.fieldSolution.targetCoordss == None:
+            raise RuntimeError('No Target was selected!')
+
+    def centroid(self, xyPos, data):
+        """check to see if there is valid signal at xpos, ypos, on image data
+        if so return the centroid.
+        """
+        # default to 5 px search rad?
+        return PyGuide.centroid(data, None, None, xyPos, rad = 6, #pixels
+            ccdInfo = self.ccdInfo)
         
-        phot.ApPhot photometry
+class Cruncher(object):
+    """This does all the work, applying calibrations, finding stars, doing photometry...
+    """
+    def __init__(self, fieldSolution, imgList):
+        """Inputs:
+        fieldSolution: a FieldSolution object, which contains a triangleHash and locations for 
+            target and comparison stars. Will get updated upon iterations
+        imgList: a list of img.Light objects for photometry extraction
         """ 
-        return self.targPhotObj.counts/self.exptime
-    
-    @property
-    def diffPhot(self):
-        """Return a differential flux/sec by dividing target flux by
-        the sum of all reference star flux
+        self.fieldSolution = fieldSolution
+        self.imgList = imgList
+        self.centroid = centroid
         
-        phot.ApPhot photometry
-        """      
-        refFluxAll = numpy.sum(self.compPhot)
-        return self.targPhot / refFluxAll
+
+    def centroid(self, xyPOs, data):
+        """Added by the Driver, 
+        """
+        raise NotImplementedError
+
+    def inImgBound(self, coord, imgData):
+        """Check that coord (xyPos) lies within the image bounds. 
+        Returns True or False
+        take PyGuide shift into account
+        """
+        coord = coord - 0.5
+        return True if numpy.zeros(2) <= coord <= coord.shape else False
         
+    def crunchPhot(self, img, fieldSolution):
+        """Do photometery for a single image
+        returns a diffPhot Obj and an updated fieldSolution
+        returns None if there was some problem
+        """
+            imgData = img.data
+            newHash = self.doHash(imgData) # might be able to get rid of this?
+            # check to see if all centroids are found in new image
+            targCent = self.centroid(imgData, fieldSolution.targetCoords)
+            compCent = [self.centroid(imgData, comp) for comp in fieldSolution.compCoords]     
+            if False in [cent.isOK for cent in targCent.extend(compCent)]:
+                # one or more centroids failed, try to hash for an offset
+                offset = fieldSolution.hash.hashItOut(newHash)                
+                targCent = self.centroid(imgData, fieldSolution.targetCoords - offset)
+                compCent = [self.centroid(imgData, comp - offset) for comp in fieldSolution.compCoords]
+                if not targCent.isOK:
+                    print "couldn't find target in image: %s, ignoring" % img.path
+                    return None
+                if False in [comp.isOK for comp in compCent]:
+                    print "warning: one or more comparison stars not found in image: %s" % img.path
+                # target was found, keep the offset and run with it                
+            else:
+                # all objects were located without hashing
+                diffPhot = diffPhot.DiffPhotObj(img = img, targCentriod = targCent, 
+                    compCentriods = compCent, inrad = INRAD, skyAnnulus = SKYANN, 
+                    resolution = RES, spline = SPLINE
+                )
+                newFieldSolution = FieldSolution(newHash, 
+                    targCentroid.xyCtr, 
+                    [comp.xyCtr for comp in compCentroids],
+                    img,
+                )
+                return diffPhot, newFieldSolution               
+
+    def crunchLoop(self, imgList):
+        """begin the crunching, build a list of DiffPhot objects
+        
+        should be parrallelizable
+        """
+        # not sure if this is necessary, rationale is for parallel loops 
+        # each with their own independent fieldSolution 
+        fieldSolution = copy.copy(self.fieldSolution) 
+        diffPhot = []
+        for img in imgList:
+            out = self.crunchPhot(img, fieldSolution)
+            if not out:
+                # photometry returned None, skip that image
+                continue
+            else:
+                # update FieldSolution
+                # append the diffPhotObj to the list
+                df, fieldSolution = out
+                diffPhot.append(df)
+        return diffPhot
+                
+
+    def doHash(self, data):
+        """create a triangle hash from data
+        inputs:
+        data: 2d image array
+        """
+        # Set up Hash Table for the 1st image (which all others will be compared to)
+        refCoords, stats = PyGuide.findStars(data, None, None, self.ccd)
+        #refCoords = numpy.asarray(refCoords) - 0.5 # origin is offset by half a pixel width
+        # extract xy centers and just keep the NBRIGHTSTARS
+        num = min(len(refCoords), NBRIGHTSTARS)
+        refCoords = numpy.asarray([refCoords[j].xyCtr for j in range(num)])
+        return TriangleHash(refCoords)    
+
+
+class FieldSolution(object):
+    """Contains information about where to find target and reference stars, and a hash
+    table for the image in case of shifts
+    """
+    def __init__(self, triangleHash = None, targetCoords = None, compCoords = None, img = None):
+        """inputs:
+        triangleHash: a TriangleHash object, used to determine image shifts
+        targetCoords: [x,y] coordset
+        compCoords: 2xN array of comparison coordinates
+        img: the img.imgBase image used
+        """
+        self.hash = triangleHash
+        self.targetCoords = targetCoords
+        self.compCoords = compCoords
+        self.img = img
+
 class PreProcess(object):
     """Go through all files and organize.
     """
@@ -234,24 +244,6 @@ class PreProcess(object):
         for obj in allObjs:
             filterDict[obj.filter].append(obj)
         return filterDict
-
-    def newDictStacked(self, oldDict, stack = 'auto'):
-        """Take a current filter keyed object dictionary, 
-        and apply stacking of your choice to it.
-        
-        oldDict: a dictionary keyed by filter names, of lists of ImageData
-            objects in chronological order
-        stackType: executable, one of (self.autoGroupImgs or self.numGroupImgs)
-        stack: 'auto' or an integer.  If auto, and automatic stacking solution
-            will be found. Or provide the number of frames to stack
-        """
-        newDict = {}
-        for filt, imgs in oldDict.iteritems():
-            if stack == 'auto':
-                newDict[filt] = self.autoGroupImgs(imgs)
-            else:
-                newDict[filt] = self.numGroupImgs(stack)
-        return newDict
             
     def getImgData(self, stack = None):
         """Return a dictionary of:
@@ -268,49 +260,7 @@ class PreProcess(object):
         else:
             # no stacking asked for, return every object
             return self.filterDict     
-     
-    def autoGroupImgs(self, imgDataList):
-        """Will return a list of subarrays of imgDataList elements.  Subsequent
-        exposures will be determined based on exposure time gaps > some number.
-        Should be useful when some sort of cycling through filters was used.
-        
-        Input:
-        imgDataList: a list of ImageData objects sorted by exposure time
-        
-        Output:
-        a list of ImageStackData objects
-        """
-        multiplier = 2.5 # throw out exposures that are seperated by more than this factor of exptime        
-        exptime = numpy.median(numpy.asarray([img.exptime for img in imgDataList]))
-        obstimes = numpy.asarray([img.dateObs for img in imgDataList])
-        diffs = numpy.asarray([x.total_seconds() for x in numpy.diff(obstimes)])
-        cutoff = numpy.median(diffs) * multiplier  
-        # nonzero returns a tuple..hence the [0] index to get the array      
-        splits = numpy.nonzero(diffs > cutoff)[0] + 1
-        groupList = numpy.split(numpy.asarray(imgDataList), splits)
-        return [ImageStackData(x) for x in groupList]
-        
-    def numGroupImgs(self, imgDataList, num):
-        """return imgDatalist broken into sub-arrays of lengh num
-        if imgDataList isn't divisible by num, the remainder of images will
-        be tossed.
-        
-        Input:
-        imgDataList: a list of ImageData objects sorted by exposure time
-        num: a number of images to return in each subarray
-        
-        Output
-        a list of ImageStackData objects
-        """
-        rem = len(imgDataList) % num
-        if  rem !=0:
-            #throw away the images in the remainder
-            n = len(imgDataList[-1*rem:])
-            del imgDataList[-1*rem:]
-            print 'warning: throwing away %s leftover images due to stacking remainder' % n
-        groupList = numpy.split(numpy.asarray(imgDataList), num)
-        return [ImageStackData(x) for x in groupList]
-        
+               
     def convertDateStr(self, dateStr):
         """Parse and convert a date string from the flare-cam header 
         to a python datetime object
