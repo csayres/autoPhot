@@ -11,16 +11,16 @@ class Img(object):
     """Base class for images
     """
     def __init__(self, path, dateObs, exptime, filter=None, type=None, calibrator=None):
-    """    
-    inputs: 
-    path: path to the image file
-    dateObs: date of observation, a python datetime object
-    exptime: the exposure time
-    type: image type, defined by subclasses...
-    filter: filter used
-    """
+        """    
+        inputs: 
+        path: path to the image file
+        dateObs: date of observation, a python datetime object
+        exptime: the exposure time
+        type: image type, defined by subclasses...
+        filter: filter used
+        """
         self.path = path
-        self.dateObs = dateObjs
+        self.dateObs = dateObs
         self.exptime = float(exptime)
         if type not in ['bias', 'flat', 'light']:
             raise RuntimeError('image must be of the type: bias, flat, or light, got %s' % type)
@@ -30,7 +30,7 @@ class Img(object):
         
     @property        
     def data(self):
-        img = pyfits.open(self.filename)
+        img = pyfits.open(self.path)
         data = img[0].data
         img.close()
         if self.calibrator:
@@ -72,7 +72,7 @@ class ImgCombine(object):
         """
         self.combType = combType
     
-    def __call__(imgList)
+    def __call__(imgList):
         """imgList: a list of Img, or subclass objects
         """
         nImg = len(imgList)
@@ -151,12 +151,12 @@ class Calibrator(object):
             flatDict[flat] = masterFlat 
         return flatDict
             
-def imgLister(fileList, type, instDict, calibrator=None):
+def imgLister(fileList, type, cameraConst, calibrator=None):
     """function for building image lists from fileLists
     inputs:
     filelist: a list of strings defining each file
     type: 'bias', 'flat', or 'light'
-    instDict: eg camera.flareCam.  Holds header solutions, etc
+    cameraConst: eg camera.flareCam.  Holds header solutions, etc
     calibrator: an image calibrator to go along with
     
     output:
@@ -166,12 +166,12 @@ def imgLister(fileList, type, instDict, calibrator=None):
     for file in fileList:
         # extract and save useful header data from each image
         imgFile = pyfits.open(file)
-        if type = 'bias':
+        if type == 'bias':
             filter = None
         else:
-            filter = imgFile[0].header[instDict['filter']].strip() # get filter used, strip whitespace
-        dateObs = instDict.parseDate(imgFile[0].header[instDict['dateObs']])
-        exptime = imgFile[0].header[instDict['exptime']]
+            filter = imgFile[0].header[cameraConst.filter.strip()] # get filter used, strip whitespace
+        dateObs = cameraConst.parseDate(imgFile[0].header[cameraConst.dateObs])
+        exptime = imgFile[0].header[cameraConst.exptime]
         imgList.append(
             Img(
                 path = file, dateObs = dateObs, exptime = exptime, 
@@ -180,7 +180,7 @@ def imgLister(fileList, type, instDict, calibrator=None):
             )
         )
         imgFile.close()           
-        
+    return imgList
            
         
         

@@ -217,7 +217,6 @@ class TriangleHash(object):
         """Take the current hash compare it with another, and return the 
         determined offset
         """
-        print 'hashin it out'
         self.setup()
         otherHash.setup() # ugh
         potentialMatches = self.triangleMatch(self.triSpace, otherHash.triSpace)

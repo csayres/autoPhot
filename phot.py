@@ -1,6 +1,12 @@
 """Tools for doing aperture photometry
 
 note: what do do if center is not inside image?
+
+note: PyGuide introduces a 0.5 pixel shift on centroiding (because pixels are
+defined with centers at n*(1-0.5) rather than n
+
+photometry set to nan if pyguide centroid is not ok--don't think it will ever
+be not ok, but whatever.
 """
 
 import numpy
@@ -196,6 +202,66 @@ class ApPhot(object):
         values, inds = radialExtract(denseData, denseCenter, 
                                      self.inrad * self.gridDense)
         values
+        
+        
+class DiffPhotObj(object):
+    """An object containing differential photometry information
+    """
+    def __init__(self, img, targCentroid, compCentroids, inrad, skyAnnulus, resolution, spline):
+        """inputs:
+        img: a baseImg or subclass of
+        targCentroid: PyGuide centoid object for target star
+        compCoords: list of PyGuide centroid objects for comparison stars
+        """
+        self.img = img
+        self.targCentroid = targCentroid # PyGuide centriod
+        self.compCentroids = compCentroids # list of PyGuide centroids
+        apPhot = ApPhot(
+            data = img.data, 
+            inrad = inrad,
+            skyAnnulus = skyAnnulus,
+            gridDense = resolution,
+            splineOrder = spline)
+        # do photometry for target, offset pyguide to 0,0.
+        if self.targCentroid.isOK:
+            self.targPhot = apPhot.fuckinDoIt(numpy.asarray(self.targCentroid.xyCtr) - 0.5)
+        else:
+            self.targPhot = None
+        self.compPhot = []
+        for comp in self.compCentroids:
+            if comp.isOK:
+                self.compPhot.append(apPhot.fuckinDoIt(numpy.asarray(comp.xyCtr) - 0.5))
+            else:
+                self.compPhot.append(None)
+
+    @property
+    def targCounts(self):
+        """photometry extracted target counts, normalized by exposure time
+        Returns numpy.nan if no object was found by PyGuide at the specified location
+        """
+        if self.targPhot: # targPhot = None if pyguide centroid is not ok
+            return self.targPhot.counts/self.img.exptime
+        else:
+            return numpy.nan
+        
+    @property
+    def compCounts(self):
+        """photometry extracted array of comparision counts, normalized by exposure time
+        Returns numpy.nan if no object was found by PyGuide at the specified location
+        """
+        out = []
+        for comp in self.compPhot:
+            if comp: # comp=None if pyguide centroid is not ok.
+                out.append(comp.counts/self.img.exptime)
+            else: 
+                out.append(numpy.nan)
+        return out
+        
+    @property
+    def diffCounts(self):
+        """return the target counts normalized by the comparison counts summed
+        """
+        return self.targCounts / numpy.sum(self.compCounts)
                                      
                 
         

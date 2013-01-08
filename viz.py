@@ -1,6 +1,11 @@
 """visualization tools
 """
-import matploltlib.pyplot as plt
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import numpy
+import itertools
+
+# axNew = fig.add_subplot(111)
 
 def apPhotExtraction(photObj):
     """Make a plot of the interpolated psf with overlays showing the radii of interest
@@ -45,9 +50,10 @@ def countsHist(fig, photObj):
     plt.show()
     
 
-def plotDiff(fig, diffPhotObjs):
+def plotDiff(ax, diffPhotObjs):
     """Plot differential photometry for target
     input:
+    ax: from matplotlib.pyplot.figure.add_subplot(...)
     a list of DiffPhotObjs
     """
     time = []
@@ -59,44 +65,40 @@ def plotDiff(fig, diffPhotObjs):
     timeseries = numpy.asarray(timeseries)
     m = numpy.median(timeseries)
     timeseries = timeseries / m # normalize so lightcurve sits around 1
-    plotLightCurve(fig,
+    plotLightCurve(ax,
         time, timeseries, 
         title = 'Target Light Curve',
         xlabel = 'Date of Observation',
         ylabel = '% Variation Flux'
         )
         
-def plotLightCurve(fig, time, timeseries, title=None, xlabel=None, ylabel=None):
+def plotLightCurve(ax, time, timeseries, title=None, xlabel=None, ylabel=None):
     """plot a light curve
     """
-    ax = fig.add_subplot(111)
-    timeseries = numpy.asarray(timeseries)
     ax.plot(time, timeseries, '.k')
     if xlabel:
-        ax.xlabel(xlabel)
+        plt.xlabel(xlabel)
     if ylabel:
-        ax.ylabel(ylabel)  
+        plt.ylabel(ylabel)  
     if title:      
-        ax.title(title)
+        plt.title(title)
         
-def showField(fig, diffPhotObj):
-    """Show the ccd image
-    
-    inputs:
-    diffPhotObj
+def showFieldSolution(ax, fieldSolution):
+    """display field solution data, must input a figure and FieldSolution object
     """
-    ax = fig.add_subplot(111)
+    circRad = 5
     #norm = colors.Normalize()
-    ax.imshow(scaleImg(diffPhotObj.img.data), cmap=cm.Greys_r)        
-    # do circles
-    targX, targY = circle(diffPhotObj.targCentroid.xyCtr - 0.5, diffPhotObj.INRAD)
-    ax.plot(targX, targY, 'r')
-    for comp in diffPhotObj.compCentroids:
-        try:
-            compX, compY = self.circle(comp.xyCtr - 0.5, diffPhotObj.INRAD)
-            axNew.plot(compX, compY, 'g')
-        except:
-            pass
+    ax.imshow(scaleImg(fieldSolution.img.data), cmap=cm.Greys_r)
+    if fieldSolution.targetCoords != None:
+        targX, targY = circle(numpy.asarray(fieldSolution.targetCoords) - 0.5, circRad)
+        ax.plot(targX, targY, 'r')
+    if fieldSolution.compCoords != None:
+        for comp in fieldSolution.compCoords:
+            compX, compY = circle(numpy.asarray(comp) - 0.5, circRad)
+            ax.plot(compX, compY, 'g')
+    plt.xlim((0,fieldSolution.img.data.shape[0]))   
+    plt.ylim((0,fieldSolution.img.data.shape[1]))        
+    plt.draw()
         
 def circle(xyCtr, rad):
     """Takes a center and a radius, returns x and y for plotting

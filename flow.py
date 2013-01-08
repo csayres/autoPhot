@@ -3,19 +3,19 @@ just one object.  Multiple filters are found and seperated.
 
 note: pyguide set to 5 px search radius
 note: add way to check if reference is outside image to avoid unnecessary hashing.
+note: add warning if comparison == target
 """
 
 import pyfits
-import collections
-import itertools
 import numpy
 import datetime
-import time
 import glob
 import matplotlib.pyplot as plt
+plt.ion()
 import matplotlib.dates
 import PyGuide
 import copy
+import phot
 import img
 from camera import flareCam
 import viz
@@ -33,7 +33,7 @@ NBRIGHTSTARS = 10
 class Driver(object):
     """Drives the reduction process, keeps track of what's going on and what's next
     """
-    def __init__(self, objFileList, instDict, biasFileList = None, flatFileList = None):
+    def __init__(self, objFileList, cameraConst = flareCam, biasFileList = None, flatFileList = None):
         """biasList: list of bias images to use, a path
         flatList: list of flats to use, a path
         objPathList: list of obj images to use, should all be of same field, path
@@ -41,64 +41,110 @@ class Driver(object):
         calibrator = None
         if biasFileList and flatFileList:
             biasList = img.imgLister(biasFileList, type = 'bias', 
-                                        instDict = flareCam, calibrator = None)
+                                        cameraConst = flareCam, calibrator = None)
             flatList = img.imgLister(flatFileList, type = 'flat', 
-                                instDict = flareCam, calibrator = None)
+                                cameraConst = flareCam, calibrator = None)
             calibrator = img.Calibrator(biasList, flatList) # removes bias from flats
         else:
             print 'no calibration frames reveived!, proceeding'
         self.calibrator = calibrator
         self.objList = img.imgLister(objFileList, type = 'light', 
-                            instDict = flareCam, calibrator = calibrator)
-        self.ccdInfo = PyGuide.CCDInfo(0, instDict['readNoise'], instDict['ccdGain']) # from flarecam manual
+                            cameraConst = flareCam, calibrator = calibrator)
+        self.ccdInfo = PyGuide.CCDInfo(0, cameraConst.readNoise, cameraConst.ccdGain) # from flarecam manual
         self.fieldSolution = FieldSolution() # initialize empty
+        self.cruncher = None # set by crunch method
+        self.df = None # set by crunch method
+        self.cruncher = Cruncher(self.fieldSolution, self.objList, self.ccdInfo)
+        self.cruncher.centroid = self.centroid
 
-    def chooseTarget(self, imgNum = 0)  
+    def crunch(self):
+        self.df = self.cruncher.crunchLoop(self.objList)
+        
+    def chooseTarget(self, imgNum = 0):
         """Select the target star
         """
         def setTarget(event):
             """matplotlib clicky callback
             """
-            cent = self.centroid([event.xdata, event.ydata] + 0.5, self.fieldSolution.img.data)
+            cent = self.centroid(numpy.asarray([event.xdata, event.ydata]) + 0.5, self.fieldSolution.img.data)
             if cent.isOK:
-                self.fieldSolution.targetCoords = cent.xyCtr
+                self.fieldSolution.targetCoords = numpy.asarray(cent.xyCtr)
                 print 'got target'
-                viz.showField(event.inaxes, self.fieldSolution)
+                viz.showFieldSolution(event.inaxes, self.fieldSolution)
             else:
                 print 'target not found, try again?'
             
         self.fieldSolution.img = self.objList[imgNum]
         fig = plt.figure()
         ax = fig.add_subplot(111)
-        viz.showField(ax, self.fieldSolution)
+        viz.showFieldSolution(ax, self.fieldSolution)
         cid = fig.canvas.mpl_connect('button_press_event', setTarget)
         print 'Click on target star'
-        plt.show()
-        if self.fieldSolution.targetCoordss == None:
-            raise RuntimeError('No Target was selected!')
+            
+    def chooseComparisons(self, imgNum = 0):
+        """Select the target star
+        """
+        compCoords = []
+        def setComp(event):
+            """matplotlib clicky callback
+            """
+            cent = self.centroid(numpy.asarray([event.xdata, event.ydata]) + 0.5, self.fieldSolution.img.data)
+            if cent.isOK:
+                compCoords.append(numpy.asarray(cent.xyCtr))
+                self.fieldSolution.compCoords = compCoords # overwrite each time
+                print 'got comparison star'
+                viz.showFieldSolution(event.inaxes, self.fieldSolution)
+            else:
+                print 'comparison not found, try again?'
+            #self.fieldSolution.compCoords = compCoords if compCoords else None
+            
+        self.fieldSolution.img = self.objList[imgNum]
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        viz.showFieldSolution(ax, self.fieldSolution)
+        cid = fig.canvas.mpl_connect('button_press_event', setComp)
+        print 'Click on comparison star'
+        #plt.show()
+        #self.fieldSolution.compCoords = compCoords if compCoords else None
 
     def centroid(self, xyPos, data):
         """check to see if there is valid signal at xpos, ypos, on image data
         if so return the centroid.
         """
         # default to 5 px search rad?
-        return PyGuide.centroid(data, None, None, xyPos, rad = 6, #pixels
+        return PyGuide.centroid(data, None, None, xyPos, rad = 8, #pixels
             ccdInfo = self.ccdInfo)
         
 class Cruncher(object):
     """This does all the work, applying calibrations, finding stars, doing photometry...
     """
-    def __init__(self, fieldSolution, imgList):
+    def __init__(self, fieldSolution, imgList, ccd):
         """Inputs:
         fieldSolution: a FieldSolution object, which contains a triangleHash and locations for 
             target and comparison stars. Will get updated upon iterations
         imgList: a list of img.Light objects for photometry extraction
+        ccd: a PyGuide ccd constant object
         """ 
         self.fieldSolution = fieldSolution
         self.imgList = imgList
-        self.centroid = centroid
-        
+        self.ccd = ccd
+        self.setPhotOptions()
 
+    def setPhotOptions(self,            
+            inrad = INRAD, # pixels
+            skyann = SKYANN, # pixels
+            res=RES, # must be odd
+            spline=SPLINE, # should probably remain 0.  Higher orders seem to
+            # introduce some structure (aliasing?) into the signal
+            # more experimentation is probably merited.
+            nbrightstars=NBRIGHTSTARS,
+        ):
+        self.inrad = inrad
+        self.skyann = skyann
+        self.res = res
+        self.spline = spline
+        self.nbrightstars = nbrightstars         
+                
     def centroid(self, xyPOs, data):
         """Added by the Driver, 
         """
@@ -117,34 +163,41 @@ class Cruncher(object):
         returns a diffPhot Obj and an updated fieldSolution
         returns None if there was some problem
         """
-            imgData = img.data
-            newHash = self.doHash(imgData) # might be able to get rid of this?
-            # check to see if all centroids are found in new image
-            targCent = self.centroid(imgData, fieldSolution.targetCoords)
-            compCent = [self.centroid(imgData, comp) for comp in fieldSolution.compCoords]     
-            if False in [cent.isOK for cent in targCent.extend(compCent)]:
-                # one or more centroids failed, try to hash for an offset
-                offset = fieldSolution.hash.hashItOut(newHash)                
-                targCent = self.centroid(imgData, fieldSolution.targetCoords - offset)
-                compCent = [self.centroid(imgData, comp - offset) for comp in fieldSolution.compCoords]
-                if not targCent.isOK:
-                    print "couldn't find target in image: %s, ignoring" % img.path
-                    return None
-                if False in [comp.isOK for comp in compCent]:
-                    print "warning: one or more comparison stars not found in image: %s" % img.path
-                # target was found, keep the offset and run with it                
-            else:
-                # all objects were located without hashing
-                diffPhot = diffPhot.DiffPhotObj(img = img, targCentriod = targCent, 
-                    compCentriods = compCent, inrad = INRAD, skyAnnulus = SKYANN, 
-                    resolution = RES, spline = SPLINE
-                )
-                newFieldSolution = FieldSolution(newHash, 
-                    targCentroid.xyCtr, 
-                    [comp.xyCtr for comp in compCentroids],
-                    img,
-                )
-                return diffPhot, newFieldSolution               
+        imgData = img.data
+        newHash = self.doHash(imgData) # might be able to get rid of this?
+        # check to see if all centroids are found in new image
+        targCent = self.centroid(fieldSolution.targetCoords, imgData)
+        compCent = [self.centroid(comp, imgData) for comp in fieldSolution.compCoords]  
+        allCents =  compCent[:]
+        allCents.append(targCent)  
+        if False in [cent.isOK for cent in allCents]:
+            fig = plt.gcf()
+            #fig = plt.figure()
+            ax = fig.add_subplot(111)
+            viz.showFieldSolution(ax, fieldSolution)
+            plt.show(block=False)
+            # one or more centroids failed, try to hash for an offset
+            offset = fieldSolution.hash.hashItOut(newHash)    
+            print 'new offset: ', offset   
+            targCent = self.centroid(fieldSolution.targetCoords - offset, imgData)
+            compCent = [self.centroid(comp - offset, imgData) for comp in fieldSolution.compCoords]
+            if not targCent.isOK:
+                print "couldn't find target in image: %s, ignoring" % img.path
+                return None
+            if False in [comp.isOK for comp in compCent]:
+                print "warning: one or more comparison stars not found in image: %s" % img.path
+            # target was found, keep the offset and run with it                
+
+        df = phot.DiffPhotObj(img = img, targCentroid = targCent, 
+            compCentroids = compCent, inrad = self.inrad, skyAnnulus = self.skyann, 
+            resolution = self.res, spline = self.spline
+        )
+        newFieldSolution = FieldSolution(newHash, 
+            targCent.xyCtr, 
+            [comp.xyCtr for comp in compCent],
+            img,
+        )
+        return df, newFieldSolution               
 
     def crunchLoop(self, imgList):
         """begin the crunching, build a list of DiffPhot objects
@@ -154,7 +207,7 @@ class Cruncher(object):
         # not sure if this is necessary, rationale is for parallel loops 
         # each with their own independent fieldSolution 
         fieldSolution = copy.copy(self.fieldSolution) 
-        diffPhot = []
+        dfList = []
         for img in imgList:
             out = self.crunchPhot(img, fieldSolution)
             if not out:
@@ -164,8 +217,8 @@ class Cruncher(object):
                 # update FieldSolution
                 # append the diffPhotObj to the list
                 df, fieldSolution = out
-                diffPhot.append(df)
-        return diffPhot
+                dfList.append(df)
+        return dfList
                 
 
     def doHash(self, data):
@@ -177,7 +230,7 @@ class Cruncher(object):
         refCoords, stats = PyGuide.findStars(data, None, None, self.ccd)
         #refCoords = numpy.asarray(refCoords) - 0.5 # origin is offset by half a pixel width
         # extract xy centers and just keep the NBRIGHTSTARS
-        num = min(len(refCoords), NBRIGHTSTARS)
+        num = min(len(refCoords), self.nbrightstars)
         refCoords = numpy.asarray([refCoords[j].xyCtr for j in range(num)])
         return TriangleHash(refCoords)    
 
@@ -201,25 +254,25 @@ class FieldSolution(object):
 class PreProcess(object):
     """Go through all files and organize.
     """
-    def __init__(self, objName, dir, instDict):
+    def __init__(self, objName, dir, cameraConst):
         """
         Inputs:
         objName = name of object
         dir = directory where object fits files are stored
-        instDict = an insturment dictory containing 
+        cameraConst = an insturment dictory containing 
             necessary info written by a given isntrument
         """
         self.objName = objName
         allObjs = []
         filters = []
         # grab every image file in the directory
-        allFitsFiles = glob.glob(dir + '*.' + instDict['imgExt'])
+        allFitsFiles = glob.glob(dir + '*.' + cameraConst.imgExt)
         for file in allFitsFiles:
             # extract and save useful header data from each image
             imgFile = pyfits.open(file)
-            filter = imgFile[0].header[instDict['filter']].strip() # get filter used, strip whitespace
-            dateObs = self.convertDateStr(imgFile[0].header[instDict['dateObs']])
-            exptime = imgFile[0].header[instDict['exptime']]
+            filter = imgFile[0].header[cameraConst.filter.strip()] # get filter used, strip whitespace
+            dateObs = self.convertDateStr(imgFile[0].header[cameraConst.dateObs])
+            exptime = imgFile[0].header[cameraConst.exptime]
             if filter not in filters:
                 filters.append(filter)
             allObjs.append(

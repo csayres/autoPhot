@@ -1,6 +1,7 @@
 """camera specifics
 """
 import datetime
+import numpy
 
 class CameraConst(object):
     """A dictionary for storing camera attributes
@@ -31,7 +32,8 @@ class FlareCam(CameraConst):
         imgExt = 'FIT', 
         readNoise = 11, 
         ccdGain = 1.5,
-    )
+    ):
+        CameraConst.__init__(self, dateObs, exptime, filter, imgExt, readNoise, ccdGain)
 
     def parseDate(self, dateStr):
         """Parse and convert a date string from the flare-cam header 
