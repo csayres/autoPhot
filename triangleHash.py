@@ -1,4 +1,19 @@
 """For generating triangles and determining offsets
+
+
+BUG:
+  File "<stdin>", line 1, in <module>
+  File "flow.py", line 45, in crunch
+    self.df = self.cruncher.crunchLoop(self.config.objList, self.config)
+  File "flow.py", line 193, in crunchLoop
+    out = self.crunchPhot(img, fieldSolution, config)
+  File "flow.py", line 148, in crunchPhot
+    offset = fieldSolution.hash.hashItOut(newHash)    
+  File "triangleHash.py", line 222, in hashItOut
+    potentialMatches = self.triangleMatch(self.triSpace, otherHash.triSpace)
+  File "triangleHash.py", line 86, in triangleMatch
+    triSort2 = numpy.argsort(triSpace2[:,0] * triSpace2[:,1])
+    IndexError: invalid index
 """
 
 import numpy
@@ -16,8 +31,9 @@ class TriangleHash(object):
             on ccd (output from PyGuide.findStars)
         """
         self.coordList = coordList
-        self.verts = None
-        self.triSpace = None
+#         self.verts = None
+#         self.triSpace = None
+        self.setup()
 
         
     def arrangeVerts(self, verts):
@@ -163,13 +179,13 @@ class TriangleHash(object):
             offsets.append(numpy.mean(diff, 0))
         return numpy.mean(numpy.asarray(offsets), 0)
                                   
-    def makeTriVerts(self):
+    def makeTriVerts(self, coordList):
         """Return a list of triangle Vertices, arranged by side length
         see: arrangeVerts()
         
         Output: 3D array
         """
-        triangles = map(self.arrangeVerts, itertools.combinations(self.coordList, 3))
+        triangles = map(self.arrangeVerts, itertools.combinations(coordList, 3))
 #         triangles = []
 #         old way, slightly slower:                            
 #         for ind1, coord1 in enumerate(self.coordList):
@@ -209,17 +225,19 @@ class TriangleHash(object):
     def setup(self):
         # hack for now to keep computations out of outer loop
         # unless they are needed
-        self.verts = self.makeTriVerts()
+        self.verts = self.makeTriVerts(self.coordList)
         self.triSpace = self.triangleSpace(self.verts)
     
     # could move this work to a standalone object
-    def hashItOut(self, otherHash):
+    def hashItOut(self, coordList):
         """Take the current hash compare it with another, and return the 
         determined offset
         """
-        self.setup()
-        otherHash.setup() # ugh
-        potentialMatches = self.triangleMatch(self.triSpace, otherHash.triSpace)
-        verifiedMatches = self.triangleVerify(potentialMatches, self.verts, otherHash.verts)
-        return self.getOffset(verifiedMatches, self.verts, otherHash.verts)
+        #self.setup()
+        otherVerts = self.makeTriVerts(coordList)
+        otherTriSpace = self.triangleSpace(otherVerts)
+        #otherHash.setup() # ugh
+        potentialMatches = self.triangleMatch(self.triSpace, otherTriSpace)
+        verifiedMatches = self.triangleVerify(potentialMatches, self.verts, otherVerts)
+        return self.getOffset(verifiedMatches, self.verts, otherVerts)
             

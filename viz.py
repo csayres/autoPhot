@@ -67,15 +67,56 @@ def plotDiff(ax, diffPhotObjs):
     timeseries = timeseries / m # normalize so lightcurve sits around 1
     plotLightCurve(ax,
         time, timeseries, 
-        title = 'Target Light Curve',
+        title = 'Target Differential Light Curve',
         xlabel = 'Date of Observation',
         ylabel = '% Variation Flux'
         )
+
+def plotTarg(ax, diffPhotObjs):
+    """Plot differential photometry for target
+    input:
+    ax: from matplotlib.pyplot.figure.add_subplot(...)
+    a list of DiffPhotObjs
+    """
+    time = []
+    timeseries = []
+    for obj in diffPhotObjs:
+        time.append(obj.img.dateObs)
+        timeseries.append(obj.targCounts)
+    time = numpy.asarray(time)
+    timeseries = numpy.asarray(timeseries)
+    plotLightCurve(ax,
+        time, timeseries, 
+        title = 'Target Light Curve',
+        xlabel = 'Date of Observation',
+        ylabel = 'Counts'
+        )
+        
+def plotComp(ax, diffPhotObjs):
+    """Plot differential photometry for target
+    input:
+    ax: from matplotlib.pyplot.figure.add_subplot(...)
+    a list of DiffPhotObjs
+    """
+    time = []
+    timeseries = []
+    for obj in diffPhotObjs:
+        time.append(obj.img.dateObs)
+        timeseries.append(obj.compCounts)
+    time = numpy.asarray(time)
+    timeseries = numpy.asarray(timeseries) #2D
+    # permute timeseries to iterate over object rather than time step
+    timeseries = timeseries.T
+    print 'time.shape', time.shape
+    for num, obj in enumerate(timeseries):
+        print 'timeseries.shape', obj.shape
+        plt.plot(time, obj, '.', label = 'Comparison %i' % num)
+    plt.legend()
         
 def plotLightCurve(ax, time, timeseries, title=None, xlabel=None, ylabel=None):
     """plot a light curve
     """
-    ax.plot(time, timeseries, '.k')
+    ax.plot(time, timeseries, '.')
     if xlabel:
         plt.xlabel(xlabel)
     if ylabel:
@@ -83,22 +124,26 @@ def plotLightCurve(ax, time, timeseries, title=None, xlabel=None, ylabel=None):
     if title:      
         plt.title(title)
         
-def showFieldSolution(ax, fieldSolution):
+def showField(ax, imgData, targetCoords, compCoords):
     """display field solution data, must input a figure and FieldSolution object
     """
     circRad = 5
     #norm = colors.Normalize()
-    ax.imshow(scaleImg(fieldSolution.img.data), cmap=cm.Greys_r)
-    if fieldSolution.targetCoords != None:
-        targX, targY = circle(numpy.asarray(fieldSolution.targetCoords) - 0.5, circRad)
+    ax.imshow(scaleImg(imgData), cmap=cm.Greys_r)
+    if targetCoords != None:
+        targX, targY = circle(numpy.asarray(targetCoords) - 0.5, circRad)
         ax.plot(targX, targY, 'r')
-    if fieldSolution.compCoords != None:
-        for comp in fieldSolution.compCoords:
+    if compCoords != None:
+        for num, comp in enumerate(compCoords):
             compX, compY = circle(numpy.asarray(comp) - 0.5, circRad)
             ax.plot(compX, compY, 'g')
-    plt.xlim((0,fieldSolution.img.data.shape[0]))   
-    plt.ylim((0,fieldSolution.img.data.shape[1]))        
+            plt.text(comp[0]+2, comp[1]+2, '%i'%(num+1))
+#     plt.xlim((0,imgData.shape[0]))   
+#     plt.ylim((0,imgData.shape[1]))        
     plt.draw()
+
+def showFieldSolution(ax, fieldSolution):
+    showField(ax, fieldSolution.img.data, fieldSolution.targetCoords, fieldSolution.compCoords)
         
 def circle(xyCtr, rad):
     """Takes a center and a radius, returns x and y for plotting

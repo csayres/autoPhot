@@ -7,6 +7,7 @@ defined with centers at n*(1-0.5) rather than n
 
 photometry set to nan if pyguide centroid is not ok--don't think it will ever
 be not ok, but whatever.
+
 """
 
 import numpy
@@ -169,7 +170,18 @@ class ApPhot(object):
     
         return values, (xinds, yinds) from original input array
         """    
-        daRng = numpy.arange(0,data.shape[0],1)
+        daRng = numpy.arange(0,data.shape[0]-1,1) 
+        """
+        added the -1, add a double check or a test?
+        data.shape[0]-1
+        bug fix for:
+            BUG:
+         File "phot.py", line 98, in fuckinDoIt
+        self.skyAnnulus[0] * self.gridDense)
+        File "phot.py", line 178, in radialExtract
+        values = data[inds]
+        IndexError: index (273) out of range (0<=index<272) in dimension 1
+        """
         xGrid, yGrid = numpy.meshgrid(daRng, daRng)
         xOff = xGrid - center[0]
         yOff = yGrid - center[1]
