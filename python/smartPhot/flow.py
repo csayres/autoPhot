@@ -18,7 +18,7 @@ import PyGuide
 import copy
 import phot
 import img
-from camera import flareCam
+#from camera import flareCam
 #from config import flareCamConfig
 import viz
 
@@ -133,40 +133,17 @@ class Cruncher(object):
         returns a diffPhot Obj and an updated fieldSolution
         returns None if there was some problem
         """
-        imgData = img.data
-        
-        ##########new#############
-#         newSources = self.findSources(imgData)
-#         try:            
-#             offset = numpy.asarray(self.fieldSolution.hash.hashItOut(newSources))
-#         except Exception as e:
-#             print 'offset failed with exception %s'%e
-#             return None
-#         print 'new offset: ', offset
-#         fig = plt.gcf()
-#         #fig = plt.figure()
-#         ax = fig.add_subplot(111)
-#         viz.showField(ax, imgData, self.fieldSolution.targetCoords - offset, [comp - offset for comp in self.fieldSolution.compCoords])
-#         plt.show(block=False)
-        #############################        
+        imgData = img.data    
         # check to see if all centroids are found in new image
         targCent = self.centroid(numpy.asarray(self.fieldSolution.targetCoords) - offset, imgData)
         compCent = [self.centroid(numpy.asarray(comp) - offset, imgData) for comp in self.fieldSolution.compCoords]  
         allCents =  compCent[:]
         allCents.append(targCent)  
         if False in [cent.isOK for cent in allCents]:
-            ####new####
-#             print 'sources missing'
-#             return None  
-            ###########
             # one or more centroids failed, try to hash for an offset
             newSources = self.findSources(imgData)
-            tempFieldSolution = FieldSolution(
-                targCent.xyCtr, 
-                [comp.xyCtr for comp in compCent],
-                img,
-                )
             # overwrite the old offset
+#            offset = numpy.asarray(self.fieldSolution.hash.hashItOut(newSources))
             try:            
                 offset = numpy.asarray(self.fieldSolution.hash.hashItOut(newSources))
             except Exception as e:
