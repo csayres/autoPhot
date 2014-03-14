@@ -20,8 +20,12 @@ def simpleExample(imageDir="/Users/csayres/arcsatData/arcsat/GJ1243/gFilter/oneN
     plt.show(block=True)
     photOut.crunch()
     outputter = autoPhot.output.Dump(imageDir, photOut)
-    outputter.saveDatFile()
-    outputter.saveField()
+    outputter.saveDatFile() # saves a data file of photometry values...looks like a date-obs column would be useful
+    outputter.saveField() # saves a pic of the finder and target/comparison stars
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    autoPhot.viz.plotDiff(ax, photOut.df)
+    plt.show(block=True)
 
 if __name__ == "__main__":
     simpleExample()
