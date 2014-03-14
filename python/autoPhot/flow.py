@@ -43,7 +43,7 @@ class Driver(object):
 
     def crunch(self):
         self.df = self.cruncher.crunchLoop(self.config.objList, self.config)
-        
+
     def chooseTarget(self, imgNum = 0):
         """Select the target star
         """
@@ -58,7 +58,7 @@ class Driver(object):
                 viz.showFieldSolution(event.inaxes, self.fieldSolution)
             else:
                 print 'target not found, try again?'
-            
+
         self.fieldSolution.img = img
         self.fieldSolution.hash = TriangleHash(self.cruncher.findSources(img.data))
         fig = plt.figure()
@@ -66,7 +66,7 @@ class Driver(object):
         viz.showFieldSolution(ax, self.fieldSolution)
         cid = fig.canvas.mpl_connect('button_press_event', setTarget)
         print 'Click on target star'
-            
+
     def chooseComparisons(self, imgNum = 0):
         """Select the target star
         """
@@ -83,7 +83,7 @@ class Driver(object):
             else:
                 print 'comparison not found, try again?'
             #self.fieldSolution.compCoords = compCoords if compCoords else None
-            
+
         self.fieldSolution.img = self.config.objList[imgNum]
         fig = plt.figure()
         ax = fig.add_subplot(111)
@@ -100,56 +100,56 @@ class Driver(object):
         # default to 5 px search rad?
         return PyGuide.centroid(data, None, None, xyPos, rad = 3, #pixels
             ccdInfo = self.config.ccdInfo)
-        
+
 class Cruncher(object):
     """This does all the work, applying calibrations, finding stars, doing photometry...
     """
     def __init__(self, fieldSolution, ccd):
         """Inputs:
-        fieldSolution: a FieldSolution object, which contains a triangleHash and locations for 
+        fieldSolution: a FieldSolution object, which contains a triangleHash and locations for
             target and comparison stars. Will get updated upon iterations
         imgList: a list of img.Light objects for photometry extraction
         ccd: a PyGuide ccd constant object
-        """ 
+        """
         self.fieldSolution = fieldSolution
-        self.ccd = ccd      
-                
+        self.ccd = ccd
+
     def centroid(self, xyPOs, data):
-        """Added by the Driver, 
+        """Added by the Driver,
         """
         raise NotImplementedError
 
     def inImgBound(self, coord, imgData):
-        """Check that coord (xyPos) lies within the image bounds. 
+        """Check that coord (xyPos) lies within the image bounds.
         Returns True or False
         take PyGuide shift into account
         """
         coord = coord - 0.5
         return True if numpy.zeros(2) <= coord <= coord.shape else False
-        
+
     def crunchPhot(self, img, offset, config):
 #     def crunchPhot(self, img, config):
         """Do photometery for a single image
         returns a diffPhot Obj and an updated fieldSolution
         returns None if there was some problem
         """
-        imgData = img.data    
+        imgData = img.data
         # check to see if all centroids are found in new image
         targCent = self.centroid(numpy.asarray(self.fieldSolution.targetCoords) - offset, imgData)
-        compCent = [self.centroid(numpy.asarray(comp) - offset, imgData) for comp in self.fieldSolution.compCoords]  
+        compCent = [self.centroid(numpy.asarray(comp) - offset, imgData) for comp in self.fieldSolution.compCoords]
         allCents =  compCent[:]
-        allCents.append(targCent)  
+        allCents.append(targCent)
         if False in [cent.isOK for cent in allCents]:
             # one or more centroids failed, try to hash for an offset
             newSources = self.findSources(imgData)
             # overwrite the old offset
 #            offset = numpy.asarray(self.fieldSolution.hash.hashItOut(newSources))
-            try:            
+            try:
                 offset = numpy.asarray(self.fieldSolution.hash.hashItOut(newSources))
             except Exception as e:
                 print 'offset failed with exception %s'%e
                 return None
-            print 'new offset: ', offset   
+            print 'new offset: ', offset
             targCent = self.centroid(self.fieldSolution.targetCoords - offset, imgData)
             compCent = [self.centroid(comp - offset, imgData) for comp in self.fieldSolution.compCoords]
             fig = plt.gcf()
@@ -163,48 +163,48 @@ class Cruncher(object):
             if False in [comp.isOK for comp in compCent]:
                 print "warning: one or more comparison stars not found in image: %s" % img.path
                 return None
-            # target was found, keep the offset and run with it                
+            # target was found, keep the offset and run with it
         try:
             df = phot.DiffPhotObj(
-                img = img, targCentroid = targCent, 
-                compCentroids = compCent, inrad = config.phot.inrad, skyAnnulus = config.phot.skyann, 
+                img = img, targCentroid = targCent,
+                compCentroids = compCent, inrad = config.phot.inrad, skyAnnulus = config.phot.skyann,
                 resolution = config.phot.res, spline = config.phot.spline
                 )
-            return df, offset        
+            return df, offset
         except Exception as e:
-            print 'Could not compute photometry, exception: %s' %e    
-            return None 
+            print 'Could not compute photometry, exception: %s' %e
+            return None
 
     def crunchLoop(self, imgList, config):
         """begin the crunching, build a list of DiffPhot objects
-        
+
         should be parrallelizable
         """
-        # not sure if this is necessary, rationale is for parallel loops 
-        # each with their own independent fieldSolution 
-        #fieldSolution = copy.copy(self.fieldSolution) 
+        # not sure if this is necessary, rationale is for parallel loops
+        # each with their own independent fieldSolution
+        #fieldSolution = copy.copy(self.fieldSolution)
         dfList = []
         offset = numpy.array([0,0]) # begin with no offset
         imNum = 1
         for img in imgList:
-                print 'image Number: ', imNum
-                imNum += 1
-                out = self.crunchPhot(img, offset, config)
-                #out = self.crunchPhot(img, config)
-                if not out:
-                    # photometry returned None, skip that image
-                    # try again using original field solution
-                    print 'image extraction failed %s, skipping' % img.path
-                    continue
-                # update offset
-                # append the diffPhotObj to the list
-                df, offset = out
-                dfList.append(df)
+            print 'image Number: ', imNum
+            imNum += 1
+            out = self.crunchPhot(img, offset, config)
+            #out = self.crunchPhot(img, config)
+            if not out:
+                # photometry returned None, skip that image
+                # try again using original field solution
+                print 'image extraction failed %s, skipping' % img.path
+                continue
+            # update offset
+            # append the diffPhotObj to the list
+            df, offset = out
+            dfList.append(df)
         return dfList
- 
+
     def findSources(self, imgData):
         """get a list of automatically detected sources
-        """ 
+        """
         # Set up Hash Table for the 1st image (which all others will be compared to)
         refCoords, stats = PyGuide.findStars(imgData, None, None, self.ccd)
         #refCoords = numpy.asarray(refCoords) - 0.5 # origin is offset by half a pixel width
@@ -212,13 +212,13 @@ class Cruncher(object):
         num = min(len(refCoords), NBRIGHTSTARS)
         refCoords = numpy.asarray([refCoords[j].xyCtr for j in range(num)])
         return refCoords
-    
+
     def computeOffset(self, imgData):
         """needed?
-        """ 
+        """
         coordList = self.findSources(imgData)
         self.fieldSolution.hash.hashItOut(coordList)
-        
+
 class FieldSolution(object):
     """Contains information about where to find target and reference stars, and a hash
     table for the image in case of shifts
@@ -233,5 +233,4 @@ class FieldSolution(object):
         self.targetCoords = targetCoords
         self.compCoords = compCoords
         self.img = img
-        self.hash = hash 
-            
+        self.hash = hash
